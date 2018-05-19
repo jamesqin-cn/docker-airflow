@@ -1,90 +1,43 @@
-# docker-airflow
-[![CircleCI branch](https://img.shields.io/circleci/project/puckel/docker-airflow/master.svg?maxAge=2592000)](https://circleci.com/gh/puckel/docker-airflow/tree/master)
-[![Docker Build Status](https://img.shields.io/docker/build/puckel/docker-airflow.svg)]()
+## 改造airflow
+### 增加对MySQL的支持
+> airflow镜像没有把mysql的包添加进去，需要改造一下，改动点如下：
 
-[![Docker Hub](https://img.shields.io/badge/docker-ready-blue.svg)](https://hub.docker.com/r/puckel/docker-airflow/)
-[![Docker Pulls](https://img.shields.io/docker/pulls/puckel/docker-airflow.svg)]()
-[![Docker Stars](https://img.shields.io/docker/stars/puckel/docker-airflow.svg)]()
+- 操作系统库支持
+```
+apt-get install libmariadbd-dev
+apt-get install libmysqlclient-dev
+```
 
-This repository contains **Dockerfile** of [apache-airflow](https://github.com/apache/incubator-airflow) for [Docker](https://www.docker.com/)'s [automated build](https://registry.hub.docker.com/u/puckel/docker-airflow/) published to the public [Docker Hub Registry](https://registry.hub.docker.com/).
+- python库支持
+```
+pip install apache-airflow[crypto,celery,postgres,`mysql`,hive,jdbc]==$AIRFLOW_VERSION
+```
 
-## Informations
+- 工具支持
+增加两个常用工具，方便以后写bash脚本操作数据库和文件传输
+```bash
+apt-get install mysql-client
+apt-get install rsync
+```
 
-* Based on Python (3.6-slim) official Image [python:3.6-slim](https://hub.docker.com/_/python/) and uses the official [Postgres](https://hub.docker.com/_/postgres/) as backend and [Redis](https://hub.docker.com/_/redis/) as queue
-* Install [Docker](https://www.docker.com/)
-* Install [Docker Compose](https://docs.docker.com/compose/install/)
-* Following the Airflow release from [Python Package Index](https://pypi.python.org/pypi/apache-airflow)
+- 修改配置文件的连接变量
+找到airflow.cfg中的core区域，修改sql\_alchemy\_conn数据库连接变量
+```ini
+[core]
+sql_alchemy_conn = mysql://MYSQL_USER:MYSQL_PASS@MYSQL_HOST/DBNAME
+```
 
-/!\ If you want to use Airflow using Python 2, use TAG [1.8.1](https://github.com/puckel/docker-airflow/releases/tag/1.8.1)
+- 传入环境变量拉起scheduler进程
+在默认启动模式不会拉起scheduler，一个完整的airflow系统应拉起webserver和scheduler两个进程
+docker启动airflow容器传入EXECUTOR环境变量，以确保下面的两行能执行
+```bash
+$CMD initdb
+exec $CMD webserver &
+exec $CMD scheduler
+```
 
-## Installation
-
-Pull the image from the Docker repository.
-
-        docker pull puckel/docker-airflow
-
-## Build
-
-For example, if you need to install [Extra Packages](https://pythonhosted.org/airflow/installation.html#extra-package), edit the Dockerfile and then build it.
-
-        docker build --rm -t puckel/docker-airflow .
-
-## Usage
-
-By default, docker-airflow runs Airflow with **SequentialExecutor** :
-
-        docker run -d -p 8080:8080 puckel/docker-airflow
-
-If you want to run another executor, use the other docker-compose.yml files provided in this repository.
-
-For **LocalExecutor** :
-
-        docker-compose -f docker-compose-LocalExecutor.yml up -d
-
-For **CeleryExecutor** :
-
-        docker-compose -f docker-compose-CeleryExecutor.yml up -d
-
-NB : If you don't want to have DAGs example loaded (default=True), you've to set the following environment variable :
-
-`LOAD_EX=n`
-
-        docker run -d -p 8080:8080 -e LOAD_EX=n puckel/docker-airflow
-
-If you want to use Ad hoc query, make sure you've configured connections:
-Go to Admin -> Connections and Edit "postgres_default" set this values (equivalent to values in airflow.cfg/docker-compose*.yml) :
-- Host : postgres
-- Schema : airflow
-- Login : airflow
-- Password : airflow
-
-For encrypted connection passwords (in Local or Celery Executor), you must have the same fernet_key. By default docker-airflow generates the fernet_key at startup, you have to set an environment variable in the docker-compose (ie: docker-compose-LocalExecutor.yml) file to set the same key accross containers. To generate a fernet_key :
-
-        python -c "from cryptography.fernet import Fernet; FERNET_KEY = Fernet.generate_key().decode(); print FERNET_KEY"
-
-Check [Airflow Documentation](https://pythonhosted.org/airflow/)
-
-
-## Install custom python package
-
-- Create a file "requirements.txt" with the desired python modules
-- Mount this file as a volume `-v $(pwd)/requirements.txt:/requirements.txt`
-- The entrypoint.sh script execute the pip install command (with --user option)
-
-## UI Links
-
-- Airflow: [localhost:8080](http://localhost:8080/)
-- Flower: [localhost:5555](http://localhost:5555/)
-
-
-## Scale the number of workers
-
-Easy scaling using docker-compose:
-
-        docker-compose scale worker=5
-
-This can be used to scale to a multi node setup using docker swarm.
-
-# Wanna help?
-
-Fork, improve and PR. ;-)
+- 创建MySQL数据库
+需要提前创建好数据库airflow，注意，字符编码需要是 latin1。我一开始尝试用utf8，发现在airflow initdb的环节会报错
+```bash
+sqlalchemy.exc.OperationalError: (_mysql_exceptions.OperationalError) (1071, 'Specified key was too long; max key length is 1000 bytes') [SQL: '\nCREATE TABLE sla_miss (\n\ttask_id VARCHAR(250) NOT NULL, \n\tdag_id VARCHAR(250) NOT NULL, \n\texecution_date DATETIME NOT NULL, \n\temail_sent BOOL, \n\ttimestamp DATETIME, \n\tdescription TEXT, \n\tPRIMARY KEY (task_id, dag_id, execution_date), \n\tCHECK (email_sent IN (0, 1))\n)\n\n']
+```
